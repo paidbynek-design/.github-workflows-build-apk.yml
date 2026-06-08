@@ -1,14 +1,5 @@
 // Lib file management + native Shizuku bridge contract.
-//
-// IMPORTANT: copying a .so file into another app's
-// /data/app/<game>/lib/arm64-v8a/ folder is a privileged native operation.
-// A web/WebView app CANNOT do this directly. When this app is wrapped into an
-// APK, a Kotlin/Java Shizuku plugin must expose a JS interface named
-// `ShizukuBridge` on `window` implementing the methods below. This file calls
-// that bridge if present, and otherwise runs in "preview" mode so the UI works.
-//
-// Storage: IndexedDB is used instead of localStorage to support large files
-// (localStorage is capped at ~5 MB; IndexedDB handles hundreds of MB).
+// Storage: IndexedDB (supports large files; localStorage is capped ~5 MB).
 
 export type LibRecord = {
   name: string
@@ -25,6 +16,7 @@ type NativeBridge = {
   shizukuStatus: () => string
   requestPermission: () => Promise<boolean> | boolean
   applyLib: (targetPackage: string, fileName: string, dataBase64: string) => Promise<string> | string
+  launchPackage: (packageName: string) => Promise<string> | string
 }
 
 function bridge(): NativeBridge | null {
@@ -53,7 +45,7 @@ export async function requestShizukuPermission(): Promise<boolean> {
   return await b.requestPermission()
 }
 
-// ── IndexedDB helpers ──────────────────────────────────────────────────────
+// ── IndexedDB storage ────────────────────────────────────────────────────────
 
 const DB_NAME = "ducky_db"
 const STORE_NAME = "lib_store"
@@ -66,9 +58,7 @@ function openDB(): Promise<IDBDatabase> {
       return
     }
     const req = indexedDB.open(DB_NAME, 1)
-    req.onupgradeneeded = () => {
-      req.result.createObjectStore(STORE_NAME)
-    }
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME)
     req.onsuccess = () => resolve(req.result)
     req.onerror = () => reject(req.error)
   })
@@ -78,8 +68,7 @@ export async function getLib(): Promise<LibRecord | null> {
   try {
     const db = await openDB()
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, "readonly")
-      const req = tx.objectStore(STORE_NAME).get(RECORD_KEY)
+      const req = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(RECORD_KEY)
       req.onsuccess = () => resolve((req.result as LibRecord) ?? null)
       req.onerror = () => reject(req.error)
     })
@@ -91,8 +80,7 @@ export async function getLib(): Promise<LibRecord | null> {
 export async function saveLib(rec: LibRecord): Promise<LibRecord> {
   const db = await openDB()
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite")
-    const req = tx.objectStore(STORE_NAME).put(rec, RECORD_KEY)
+    const req = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(rec, RECORD_KEY)
     req.onsuccess = () => resolve(rec)
     req.onerror = () => reject(req.error)
   })
@@ -102,8 +90,7 @@ export async function clearLib(): Promise<void> {
   try {
     const db = await openDB()
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, "readwrite")
-      const req = tx.objectStore(STORE_NAME).delete(RECORD_KEY)
+      const req = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(RECORD_KEY)
       req.onsuccess = () => resolve()
       req.onerror = () => reject(req.error)
     })
@@ -112,7 +99,7 @@ export async function clearLib(): Promise<void> {
   }
 }
 
-// ── File helpers ───────────────────────────────────────────────────────────
+// ── File helpers ─────────────────────────────────────────────────────────────
 
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -151,6 +138,17 @@ export async function applyLib(targetPackage: string): Promise<ApplyResult> {
     return JSON.parse(raw) as ApplyResult
   } catch (e) {
     return { ok: false, message: `Apply failed: ${(e as Error).message}` }
+  }
+}
+
+/** Launches the game after injection. Silently ignored in preview/browser mode. */
+export async function launchPackage(packageName: string): Promise<void> {
+  const b = bridge()
+  if (!b || !packageName.trim()) return
+  try {
+    await b.launchPackage(packageName.trim())
+  } catch {
+    // ignore — launch is best-effort
   }
 }
 
