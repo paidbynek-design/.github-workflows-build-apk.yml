@@ -13,7 +13,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -47,15 +47,11 @@ jobs:
       - name: Add Shizuku dependency
         run: |
           APP_GRADLE=android/app/build.gradle
-          # add Shizuku libs to dependencies block
           sed -i "/dependencies {/a\    implementation 'dev.rikka.shizuku:api:13.1.5'\n    implementation 'dev.rikka.shizuku:provider:13.1.5'" $APP_GRADLE
 
       - name: Inject Shizuku into AndroidManifest
         run: |
-          MANIFEST=android/app/src/main/AndroidManifest.xml
-          # add permission + Shizuku provider before </application>
           python3 - <<'PY'
-          import re, io
           p = "android/app/src/main/AndroidManifest.xml"
           s = open(p, encoding="utf-8").read()
           if "moe.shizuku.manager.permission.API_V23" not in s:
