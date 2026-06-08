@@ -6,30 +6,24 @@
 // APK, a Kotlin/Java Shizuku plugin must expose a JS interface named
 // `ShizukuBridge` on `window` implementing the methods below. This file calls
 // that bridge if present, and otherwise runs in "preview" mode so the UI works.
+//
+// Storage: IndexedDB is used instead of localStorage to support large files
+// (localStorage is capped at ~5 MB; IndexedDB handles hundreds of MB).
 
 export type LibRecord = {
   name: string
   size: number
-  // base64 of the .so contents, stored on-device so the native layer can read it
   dataBase64: string
   uploadedAt: number
   version: string
-  // arm64-v8a is the target ABI folder
   abi: "arm64-v8a"
 }
 
-const KEY = "ducky_libfile"
-
 export type ShizukuStatus = "available" | "permission_required" | "not_running" | "unsupported"
 
-// Shape of the native bridge the APK should inject on window.
 type NativeBridge = {
-  // returns one of ShizukuStatus
   shizukuStatus: () => string
-  // request Shizuku permission, resolves to boolean granted
   requestPermission: () => Promise<boolean> | boolean
-  // copy the stored lib (base64) into the game's arm64-v8a folder.
-  // returns a JSON string: { ok: boolean, message: string }
   applyLib: (targetPackage: string, fileName: string, dataBase64: string) => Promise<string> | string
 }
 
@@ -59,31 +53,72 @@ export async function requestShizukuPermission(): Promise<boolean> {
   return await b.requestPermission()
 }
 
-export function getLib(): LibRecord | null {
-  if (typeof window === "undefined") return null
+// ── IndexedDB helpers ──────────────────────────────────────────────────────
+
+const DB_NAME = "ducky_db"
+const STORE_NAME = "lib_store"
+const RECORD_KEY = "current"
+
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("IndexedDB not available"))
+      return
+    }
+    const req = indexedDB.open(DB_NAME, 1)
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(STORE_NAME)
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+export async function getLib(): Promise<LibRecord | null> {
   try {
-    const raw = localStorage.getItem(KEY)
-    return raw ? (JSON.parse(raw) as LibRecord) : null
+    const db = await openDB()
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readonly")
+      const req = tx.objectStore(STORE_NAME).get(RECORD_KEY)
+      req.onsuccess = () => resolve((req.result as LibRecord) ?? null)
+      req.onerror = () => reject(req.error)
+    })
   } catch {
     return null
   }
 }
 
-export function saveLib(rec: LibRecord): LibRecord {
-  localStorage.setItem(KEY, JSON.stringify(rec))
-  return rec
+export async function saveLib(rec: LibRecord): Promise<LibRecord> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite")
+    const req = tx.objectStore(STORE_NAME).put(rec, RECORD_KEY)
+    req.onsuccess = () => resolve(rec)
+    req.onerror = () => reject(req.error)
+  })
 }
 
-export function clearLib(): void {
-  localStorage.removeItem(KEY)
+export async function clearLib(): Promise<void> {
+  try {
+    const db = await openDB()
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readwrite")
+      const req = tx.objectStore(STORE_NAME).delete(RECORD_KEY)
+      req.onsuccess = () => resolve()
+      req.onerror = () => reject(req.error)
+    })
+  } catch {
+    return
+  }
 }
+
+// ── File helpers ───────────────────────────────────────────────────────────
 
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
       const result = reader.result as string
-      // strip the data: prefix
       resolve(result.includes(",") ? result.split(",")[1] : result)
     }
     reader.onerror = reject
@@ -93,9 +128,8 @@ export function fileToBase64(file: File): Promise<string> {
 
 export type ApplyResult = { ok: boolean; message: string }
 
-// Applies the stored lib to the game's arm64-v8a folder through Shizuku.
 export async function applyLib(targetPackage: string): Promise<ApplyResult> {
-  const lib = getLib()
+  const lib = await getLib()
   if (!lib) return { ok: false, message: "No lib file uploaded yet." }
   if (!targetPackage.trim()) return { ok: false, message: "Enter the game package name." }
 
@@ -114,8 +148,7 @@ export async function applyLib(targetPackage: string): Promise<ApplyResult> {
 
   try {
     const raw = await b.applyLib(targetPackage.trim(), lib.name, lib.dataBase64)
-    const parsed = JSON.parse(raw) as ApplyResult
-    return parsed
+    return JSON.parse(raw) as ApplyResult
   } catch (e) {
     return { ok: false, message: `Apply failed: ${(e as Error).message}` }
   }
