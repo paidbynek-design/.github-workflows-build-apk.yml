@@ -28,15 +28,15 @@ jobs:
         run: npm install -g pnpm
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --no-frozen-lockfile --ignore-scripts
 
       - name: Build static web export
         run: pnpm build
 
       - name: Install Capacitor
         run: |
-          pnpm add -D @capacitor/cli
-          pnpm add @capacitor/core @capacitor/android
+          pnpm add -D @capacitor/cli --ignore-scripts
+          pnpm add @capacitor/core @capacitor/android --ignore-scripts
 
       - name: Add Android platform
         run: npx cap add android
