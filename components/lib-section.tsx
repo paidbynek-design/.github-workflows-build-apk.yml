@@ -38,7 +38,7 @@ export function LibSection() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    setLib(getLib())
+    getLib().then(setLib)
     setStatus(getShizukuStatus())
     const saved = localStorage.getItem("ducky_target_pkg")
     if (saved) setPkg(saved)
@@ -48,10 +48,10 @@ export function LibSection() {
     const file = e.target.files?.[0]
     if (!file) return
     setBusy(true)
-    setMsg(null)
+    setMsg({ ok: true, text: `Reading ${formatBytes(file.size)} — please wait…` })
     try {
       const dataBase64 = await fileToBase64(file)
-      const rec = saveLib({
+      const rec = await saveLib({
         name: file.name,
         size: file.size,
         dataBase64,
@@ -87,8 +87,8 @@ export function LibSection() {
     setBusy(false)
   }
 
-  function handleClear() {
-    clearLib()
+  async function handleClear() {
+    await clearLib()
     setLib(null)
     setMsg(null)
   }
@@ -110,7 +110,6 @@ export function LibSection() {
         Shizuku.
       </p>
 
-      {/* current lib */}
       {lib ? (
         <div className="mt-4 rounded-xl border border-blue-400/20 bg-black/40 p-3">
           <p className="truncate font-mono text-sm text-white">{lib.name}</p>
@@ -126,7 +125,6 @@ export function LibSection() {
         </p>
       )}
 
-      {/* version + upload */}
       <div className="mt-4 flex items-center gap-2">
         <input
           type="text"
@@ -152,7 +150,6 @@ export function LibSection() {
         />
       </div>
 
-      {/* target package */}
       <input
         type="text"
         value={pkg}
@@ -161,7 +158,6 @@ export function LibSection() {
         className="mt-3 w-full rounded-lg border border-white/15 bg-black/50 px-3 py-2.5 font-mono text-xs text-white outline-none focus:border-blue-400/70"
       />
 
-      {/* apply */}
       <button
         type="button"
         onClick={handleApply}
