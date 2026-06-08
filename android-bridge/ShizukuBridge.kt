@@ -1,7 +1,7 @@
 package com.ducky.app
 
+import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
@@ -9,32 +9,17 @@ import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuRemoteProcess
 import java.io.File
 
-/**
- * Native bridge that the web UI (lib/libfile.ts) talks to via window.ShizukuBridge.
- *
- * The web layer only knows about three methods:
- *   - shizukuStatus()  -> "available" | "permission_required" | "not_running" | "unsupported"
- *   - requestPermission() -> boolean (granted)
- *   - applyLib(targetPackage, fileName, dataBase64) -> JSON string { ok, message }
- *
- * Everything privileged (writing into another app's arm64-v8a lib dir) happens here,
- * through a Shizuku elevated shell. A WebView/JS layer can never do this on its own.
- */
 class ShizukuBridge(private val context: android.content.Context) {
 
     companion object {
         private const val PERMISSION_REQUEST_CODE = 4209
-        // arm64-v8a is the 64-bit ARM ABI folder we target.
         private const val ABI = "arm64-v8a"
     }
-
-    // ---- status -------------------------------------------------------------
 
     @JavascriptInterface
     fun shizukuStatus(): String {
         return try {
             if (!Shizuku.pingBinder()) {
-                // Shizuku service is not running / app not started.
                 "not_running"
             } else if (Shizuku.isPreV11() || Shizuku.shouldShowRequestPermissionRationale()) {
                 "permission_required"
@@ -48,17 +33,12 @@ class ShizukuBridge(private val context: android.content.Context) {
         }
     }
 
-    // ---- permission ---------------------------------------------------------
-
     @JavascriptInterface
     fun requestPermission(): Boolean {
         return try {
             if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
                 true
             } else {
-                // This pops the Shizuku permission dialog. The result is delivered
-                // asynchronously to a listener registered in MainActivity; for a
-                // simple flow we return the current state and let the UI re-check.
                 Shizuku.requestPermission(PERMISSION_REQUEST_CODE)
                 Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
             }
@@ -67,28 +47,17 @@ class ShizukuBridge(private val context: android.content.Context) {
         }
     }
 
-    // ---- apply lib ----------------------------------------------------------
-
     @JavascriptInterface
     fun applyLib(targetPackage: String, fileName: String, dataBase64: String): String {
         return try {
-            // 1. Decode the .so the web UI stored as base64 and stage it in our cache.
             val bytes = Base64.decode(dataBase64, Base64.DEFAULT)
             val staged = File(context.cacheDir, fileName)
             staged.writeBytes(bytes)
 
-            // 2. Resolve the game's native library directory for arm64-v8a.
-            //    Most games keep extracted libs at:
-            //      /data/app/<...>/<package>/lib/arm64-v8a/
-            //    We resolve nativeLibraryDir from the installed package, then
-            //    fall back to the data/data lib path.
             val appInfo = context.packageManager.getApplicationInfo(targetPackage, 0)
-            val nativeDir = appInfo.nativeLibraryDir // e.g. .../lib/arm64
+            val nativeDir = appInfo.nativeLibraryDir
             val dataLibDir = "/data/data/$targetPackage/lib/$ABI"
 
-            // 3. Build a privileged shell command run through Shizuku.
-            //    We copy into both the resolved native dir and the data lib dir,
-            //    fixing ownership/permissions so the game can load it.
             val targets = listOf(nativeDir, dataLibDir)
             val sb = StringBuilder()
             for (dir in targets) {
@@ -117,6 +86,26 @@ class ShizukuBridge(private val context: android.content.Context) {
             JSONObject().put("ok", false).put("message", "Game package not installed.").toString()
         } catch (e: Throwable) {
             JSONObject().put("ok", false).put("message", "Apply failed: ${e.message}").toString()
+        }
+    }
+
+    /**
+     * Launches the given package as if the user tapped its icon.
+     * Returns JSON { ok, message }.
+     */
+    @JavascriptInterface
+    fun launchPackage(packageName: String): String {
+        return try {
+            val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+                ?: return JSONObject()
+                    .put("ok", false)
+                    .put("message", "Could not find launch intent for $packageName — is the game installed?")
+                    .toString()
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            context.startActivity(intent)
+            JSONObject().put("ok", true).put("message", "Launched $packageName").toString()
+        } catch (e: Throwable) {
+            JSONObject().put("ok", false).put("message", "Launch failed: ${e.message}").toString()
         }
     }
 }
