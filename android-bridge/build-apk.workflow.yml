@@ -1,0 +1,106 @@
+name: Build DUCKY APK
+
+# This file is intentionally NOT under .github/workflows because v0's GitHub
+# connection cannot push workflow files. After v0 pushes this repo to GitHub:
+#   1. On github.com open your repo
+#   2. Click "Add file" -> "Create new file"
+#   3. Name it exactly:  .github/workflows/build-apk.yml
+#   4. Paste the contents of THIS file (everything below the divider) into it
+#   5. Commit. The Actions tab will then build your APK automatically.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build static web export
+        run: pnpm build
+
+      - name: Install Capacitor
+        run: |
+          pnpm add -D @capacitor/cli
+          pnpm add @capacitor/core @capacitor/android
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Sync web assets to Android
+        run: npx cap sync android
+
+      - name: Add Shizuku dependency
+        run: |
+          APP_GRADLE=android/app/build.gradle
+          # add Shizuku libs to dependencies block
+          sed -i "/dependencies {/a\    implementation 'dev.rikka.shizuku:api:13.1.5'\n    implementation 'dev.rikka.shizuku:provider:13.1.5'" $APP_GRADLE
+
+      - name: Inject Shizuku into AndroidManifest
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          # add permission + Shizuku provider before </application>
+          python3 - <<'PY'
+          import re, io
+          p = "android/app/src/main/AndroidManifest.xml"
+          s = open(p, encoding="utf-8").read()
+          if "moe.shizuku.manager.permission.API_V23" not in s:
+              s = s.replace("<application",
+                  '<uses-permission android:name="moe.shizuku.manager.permission.API_V23" />\n    <application', 1)
+          provider = (
+              '        <provider\n'
+              '            android:name="rikka.shizuku.ShizukuProvider"\n'
+              '            android:authorities="${applicationId}.shizuku"\n'
+              '            android:multiprocess="false"\n'
+              '            android:enabled="true"\n'
+              '            android:exported="true"\n'
+              '            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />\n'
+          )
+          if "rikka.shizuku.ShizukuProvider" not in s:
+              s = s.replace("</application>", provider + "    </application>", 1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+      - name: Copy Kotlin bridge files
+        run: |
+          PKG_DIR=android/app/src/main/java/com/ducky/app
+          mkdir -p $PKG_DIR
+          cp android-bridge/ShizukuBridge.kt $PKG_DIR/ShizukuBridge.kt
+          cp android-bridge/MainActivity.kt $PKG_DIR/MainActivity.kt
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DUCKY-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
