@@ -1,0 +1,84 @@
+build:
+  name: Build DUCKY APK
+  steps:
+    - eas/checkout
+
+    - run:
+        name: Install pnpm
+        command: npm install -g pnpm
+
+    - run:
+        name: Install dependencies
+        command: pnpm install --no-frozen-lockfile
+
+    - run:
+        name: Build static web export
+        command: pnpm build
+
+    - run:
+        name: Install Capacitor
+        command: |
+          pnpm add @capacitor/core @capacitor/android
+          pnpm add -D @capacitor/cli
+
+    - run:
+        name: Add Android platform
+        command: npx cap add android
+
+    - run:
+        name: Sync web assets to Android
+        command: npx cap sync android
+
+    - run:
+        name: Add Shizuku dependency to Gradle
+        command: |
+          APP_GRADLE=android/app/build.gradle
+          sed -i "/dependencies {/a\\    implementation 'dev.rikka.shizuku:api:13.1.5'\n    implementation 'dev.rikka.shizuku:provider:13.1.5'" $APP_GRADLE
+
+    - run:
+        name: Inject Shizuku into AndroidManifest
+        command: |
+          python3 - <<'PY'
+          p = "android/app/src/main/AndroidManifest.xml"
+          s = open(p, encoding="utf-8").read()
+          if "moe.shizuku.manager.permission.API_V23" not in s:
+              s = s.replace("<application",
+                  '<uses-permission android:name="moe.shizuku.manager.permission.API_V23" />\n    <application', 1)
+          provider = (
+              '        <provider\n'
+              '            android:name="rikka.shizuku.ShizukuProvider"\n'
+              '            android:authorities="${applicationId}.shizuku"\n'
+              '            android:multiprocess="false"\n'
+              '            android:enabled="true"\n'
+              '            android:exported="true"\n'
+              '            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />\n'
+          )
+          if "rikka.shizuku.ShizukuProvider" not in s:
+              s = s.replace("</application>", provider + "    </application>", 1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+    - run:
+        name: Copy Kotlin bridge files
+        command: |
+          PKG_DIR=android/app/src/main/java/com/ducky/app
+          mkdir -p $PKG_DIR
+          cp android-bridge/ShizukuBridge.kt $PKG_DIR/ShizukuBridge.kt
+          cp android-bridge/MainActivity.kt $PKG_DIR/MainActivity.kt
+
+    - run:
+        name: Setup Java 21
+        command: |
+          export JAVA_HOME=/usr/lib/jvm/temurin-21
+          java -version
+
+    - run:
+        name: Build debug APK
+        command: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+    - eas/upload-artifact:
+        name: DUCKY-apk
+        path: android/app/build/outputs/apk/debug/app-debug.apk
