@@ -10,6 +10,7 @@ import {
   formatBytes,
   getLib,
   getShizukuStatus,
+  launchPackage,
   requestShizukuPermission,
   saveLib,
 } from "@/lib/libfile"
@@ -28,13 +29,17 @@ const STATUS_COLOR: Record<ShizukuStatus, string> = {
   unsupported: "text-neutral-400",
 }
 
+// Default target game
+const DEFAULT_PKG = "com.im30.ROE2"
+
 export function LibSection() {
   const [lib, setLib] = useState<LibRecord | null>(null)
   const [status, setStatus] = useState<ShizukuStatus>("unsupported")
-  const [pkg, setPkg] = useState("")
+  const [pkg, setPkg] = useState(DEFAULT_PKG)
   const [version, setVersion] = useState("")
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [launching, setLaunching] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -73,6 +78,7 @@ export function LibSection() {
     setBusy(true)
     setMsg(null)
     localStorage.setItem("ducky_target_pkg", pkg.trim())
+
     if (status === "permission_required") {
       const granted = await requestShizukuPermission()
       setStatus(getShizukuStatus())
@@ -82,9 +88,20 @@ export function LibSection() {
         return
       }
     }
+
     const res = await applyLib(pkg)
     setMsg({ ok: res.ok, text: res.message })
     setBusy(false)
+
+    // Auto-launch the game after a successful inject
+    if (res.ok) {
+      setLaunching(true)
+      setMsg({ ok: true, text: `${res.message} — opening game in 2 s…` })
+      setTimeout(async () => {
+        await launchPackage(pkg)
+        setLaunching(false)
+      }, 2000)
+    }
   }
 
   async function handleClear() {
@@ -107,7 +124,7 @@ export function LibSection() {
       <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
         Upload a <span className="font-mono text-neutral-300">.so</span> library. It is applied to
         the game&apos;s <span className="font-mono text-neutral-300">arm64-v8a</span> folder via
-        Shizuku.
+        Shizuku, then the game opens automatically.
       </p>
 
       {lib ? (
@@ -161,10 +178,10 @@ export function LibSection() {
       <button
         type="button"
         onClick={handleApply}
-        disabled={busy || !lib}
+        disabled={busy || launching || !lib}
         className="mt-3 w-full rounded-lg bg-gradient-to-r from-blue-500 to-blue-400 py-3 text-sm font-bold tracking-wider text-white shadow-[0_0_18px_rgba(56,120,255,0.5)] transition-transform active:scale-[0.98] disabled:opacity-50 disabled:shadow-none"
       >
-        {busy ? "WORKING..." : "UPDATE LIB TO ARM64-V8A"}
+        {launching ? "LAUNCHING GAME…" : busy ? "WORKING..." : "UPDATE LIB TO ARM64-V8A"}
       </button>
 
       {lib && (
