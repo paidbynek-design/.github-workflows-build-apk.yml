@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "DUCKY",
+    "slug": "ducky",
+    "version": "1.0.0",
+    "android": {
+      "package": "com.ducky.app"
+    }
+  }
+}
